@@ -50,17 +50,10 @@ class MessageMiddlewareSumWorkerControlQueue(RabbitMQBase, MessageMiddlewareQueu
             raise MessageMiddlewareMessageError("Error interno inesperado al enviar") from e
 
     def start_consuming(self, on_message_callback):
-        def internal_callback(ch, method, properties, body):
-            on_message_callback(
-                body,
-                lambda: ch.basic_ack(delivery_tag=method.delivery_tag),
-                lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True),
-            )
-
         try:
             self.channel.basic_consume(
                 queue=self.queue_name,
-                on_message_callback=internal_callback,
+                on_message_callback=self._build_internal_callback(on_message_callback),
                 auto_ack=False,
             )
             self.channel.start_consuming()
@@ -107,13 +100,6 @@ class MessageMiddlewareSumWorkerControlExchange(RabbitMQBase, MessageMiddlewareE
             raise MessageMiddlewareMessageError("Error interno inesperado al publicar") from e
 
     def start_consuming(self, on_message_callback):
-        def internal_callback(ch, method, properties, body):
-            on_message_callback(
-                body,
-                lambda: ch.basic_ack(delivery_tag=method.delivery_tag),
-                lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True),
-            )
-
         try:
             result = self.channel.queue_declare(queue="", exclusive=True)
             self.consumer_queue_name = result.method.queue
@@ -124,7 +110,7 @@ class MessageMiddlewareSumWorkerControlExchange(RabbitMQBase, MessageMiddlewareE
             self.channel.basic_qos(prefetch_count=MAX_MESSAGES_PER_WORKER)
             self.channel.basic_consume(
                 queue=self.consumer_queue_name,
-                on_message_callback=internal_callback,
+                on_message_callback=self._build_internal_callback(on_message_callback),
                 auto_ack=False,
             )
             self.channel.start_consuming()

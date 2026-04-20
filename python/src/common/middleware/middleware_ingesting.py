@@ -46,16 +46,9 @@ class MessageMiddlewareQueueRabbitMQ(RabbitMQBase, MessageMiddlewareQueue):
             raise MessageMiddlewareCloseError("Error al cerrar la conexión") from e 
 
     def start_consuming(self, on_message_callback):
-        def internal_callback(ch, method, properties, body):
-            on_message_callback(
-                body,
-                lambda: ch.basic_ack(delivery_tag=method.delivery_tag),
-                lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-            )
-
         self.channel.basic_consume(
             queue=self.queue_name,
-            on_message_callback=internal_callback,
+            on_message_callback=self._build_internal_callback(on_message_callback),
             auto_ack=False
         )
         try:
@@ -122,16 +115,9 @@ class MessageMiddlewareExchangeRabbitMQ(RabbitMQBase, MessageMiddlewareExchange)
             raise MessageMiddlewareCloseError("Error al cerrar la conexión") from e
 
     def start_consuming(self, on_message_callback):
-        def internal_callback(ch, method, properties, body):
-            on_message_callback(
-                body,
-                lambda: ch.basic_ack(delivery_tag=method.delivery_tag),
-                lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-            )
-
         self.channel.basic_consume(
             queue=self.consumer_queue_name,
-            on_message_callback=internal_callback,
+            on_message_callback=self._build_internal_callback(on_message_callback),
             auto_ack=False,
         )
         try:

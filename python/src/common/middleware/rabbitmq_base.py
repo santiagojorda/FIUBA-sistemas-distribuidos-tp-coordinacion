@@ -32,6 +32,16 @@ class RabbitMQBase:
         self.channel = None
         self.connection = None
 
+    def _build_internal_callback(self, on_message_callback):
+        def internal_callback(ch, method, properties, body):
+            on_message_callback(
+                body,
+                lambda: ch.basic_ack(delivery_tag=method.delivery_tag),
+                lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True),
+            )
+
+        return internal_callback
+
     def stop_consuming(self):
         try:
             if self.channel:
