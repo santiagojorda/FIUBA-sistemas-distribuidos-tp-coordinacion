@@ -13,10 +13,15 @@ AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 TOP_SIZE = int(os.environ["TOP_SIZE"])
 
+AMOUNT_FIELDS_DATA = 3
+
 
 class AggregationFilter:
 
     def __init__(self):
+
+        logging.info(f"Aggregation ID: {ID} | Starting aggregation filter")
+
         self.input_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
             MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{ID}"]
         )
@@ -25,8 +30,8 @@ class AggregationFilter:
         )
         self.fruit_top = []
 
-    def _process_data(self, fruit, amount):
-        logging.info("Processing data message")
+    def _process_data(self, client_id, fruit, amount):
+        logging.info(f"Aggregation ID: {ID} | Processing data message | client_id: {client_id} | fruit: {fruit} | amount: {amount}")
         for i in range(len(self.fruit_top)):
             if self.fruit_top[i].fruit == fruit:
                 self.fruit_top[i] = self.fruit_top[i] + fruit_item.FruitItem(
@@ -36,7 +41,7 @@ class AggregationFilter:
         bisect.insort(self.fruit_top, fruit_item.FruitItem(fruit, amount))
 
     def _process_eof(self):
-        logging.info("Received EOF")
+        logging.info(f"Aggregation ID: {ID} | Received EOF")
         fruit_chunk = list(self.fruit_top[-TOP_SIZE:])
         fruit_chunk.reverse()
         fruit_top = list(
@@ -49,9 +54,9 @@ class AggregationFilter:
         del self.fruit_top
 
     def process_messsage(self, message, ack, nack):
-        logging.info("Process message")
+        logging.info(f"Aggregation ID: {ID} | Processing message")
         fields = message_protocol.internal.deserialize(message)
-        if len(fields) == 2:
+        if len(fields) == AMOUNT_FIELDS_DATA:
             self._process_data(*fields)
         else:
             self._process_eof()

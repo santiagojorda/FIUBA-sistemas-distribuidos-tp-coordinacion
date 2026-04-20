@@ -3,6 +3,12 @@ import logging
 import threading
 
 from common import middleware, message_protocol, fruit_item
+from common.middleware import (
+    MessageMiddlewareQueueRabbitMQ,
+    MessageMiddlewareSumAggregationPartitionedExchangeRabbitMQ,
+    MessageMiddlewareSumWorkerControlQueue,
+    MessageMiddlewareSumWorkerControlExchange
+)
 
 ID = int(os.environ["ID"])
 MOM_HOST = os.environ["MOM_HOST"]
@@ -21,24 +27,27 @@ class SumFilter:
         logging.info(f"Starting sum filter with ID {ID}")
         
         self.eof_received_by_client = {}
-        self.amount_by_fruit = {}
+        self.amount_by_fruit_by_client = {}
 
         self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, INPUT_QUEUE
         )
 
-        # self.control_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(MOM_HOST)
-        #self.control_queue = middleware.MessageMiddlewareSumWorkerControlQueue(MOM_HOST, ID)
+        self.control_exchange = middleware.MessageMiddlewareSumWorkerControlExchange(MOM_HOST)
+        self.control_queue = middleware.MessageMiddlewareSumWorkerControlQueue(MOM_HOST, ID)
 
-        self.data_output_exchanges = []
-        for i in range(AGGREGATION_AMOUNT):
-            data_output_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-                MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
+        self.data_output_exchange = (
+            middleware.MessageMiddlewareSumAggregationPartitionedExchangeRabbitMQ(
+                MOM_HOST,
+                AGGREGATION_PREFIX,
+                AGGREGATION_PREFIX,
+                AGGREGATION_AMOUNT,
             )
-            self.data_output_exchanges.append(data_output_exchange)
+        )
 
     def _process_data(self, client_id, fruit, amount):
-        self.amount_by_fruit[fruit] = self.amount_by_fruit.get(
+        amount_by_fruit = self.amount_by_fruit_by_client.setdefault(client_id, {})
+        amount_by_fruit[fruit] = amount_by_fruit.get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
 
@@ -46,8 +55,7 @@ class SumFilter:
     # procesa de la exchange de control
     def _run_control_polling(self):
         logging.info(f"Sum ID: {ID} | Starting control polling thread")
-        # self.control_exchange.start_consuming(self.process_control_message)
-        pass
+        self.control_queue.start_consuming(self.process_control_message)
 
     def process_control_message(self, message, ack, nack):
         (client_id,) = message_protocol.internal.deserialize_control(message)
@@ -56,18 +64,26 @@ class SumFilter:
 
     def _process_eof(self, client_id):
         if self.eof_received_by_client.get(client_id, False):
-            logging.info(f"EOF received from client {client_id}")
+            logging.info(
+                f"Sum ID: {ID} | Control exchange | EOF already received from client {client_id}"
+            )
             return
 
+        logging.info(f"Sum ID: {ID} | Control exchange | EOF received from client {client_id}")
+        logging.info(f"Sum ID: {ID} | Send to aggregation | Processing EOF from client {client_id}")
         self.eof_received_by_client[client_id] = True
+        amount_by_fruit = self.amount_by_fruit_by_client.get(client_id, {})
         
-        for final_fruit_item in self.amount_by_fruit.values():
-            for data_output_exchange in self.data_output_exchanges:
-                data_output_exchange.send(
-                    message_protocol.internal.serialize(
-                        [final_fruit_item.fruit, final_fruit_item.amount]
-                    )
-                )
+        for final_fruit_item in amount_by_fruit.values():
+            self.data_output_exchange.send(
+                message_protocol.internal.serialize(
+                    [client_id, final_fruit_item.fruit, final_fruit_item.amount]
+                ),
+                final_fruit_item.fruit,
+            )
+        if client_id in self.amount_by_fruit_by_client:
+            del self.amount_by_fruit_by_client[client_id]
+        logging.info(f"Sum ID: {ID} | Send to aggregation | Finished processing EOF from client {client_id}")
 
     # procesa de la queue de ingreso  
     def process_data_messsage(self, message, ack, nack):
@@ -83,8 +99,14 @@ class SumFilter:
             logging.info(
                 f"Sum ID: {ID} | Message received | EOF from client_id: {client_id} | "
             )
-            self.eof_received_by_client[client_id] = True
-            # self.control_exchange.send(message_protocol.internal.serialize_control(client_id))
+            if not self.eof_received_by_client.get(client_id, False):
+                logging.info(
+                    f"Sum ID: {ID} | Control exchange | Forwarding EOF from client {client_id}"
+                )
+                self.control_exchange.send(
+                    message_protocol.internal.serialize_control(client_id)
+                )
+
         ack()
 
     def start(self):
