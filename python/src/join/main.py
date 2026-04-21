@@ -11,25 +11,33 @@ SUM_PREFIX = os.environ["SUM_PREFIX"]
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 TOP_SIZE = int(os.environ["TOP_SIZE"])
-
+JOIN_EXCHANGE = "JOIN_EXCHANGE"
 
 class JoinFilter:
 
     def __init__(self):
-        self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
-            MOM_HOST, INPUT_QUEUE
+        logging.info("Starting join filter")
+
+        self.eof_received_by_client = {}
+        self.fruit_top_by_client = {}
+
+        self.input_queue = middleware.DirectQueueRabbitMQ(
+            MOM_HOST, INPUT_QUEUE, JOIN_EXCHANGE
         )
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
         )
 
     def process_messsage(self, message, ack, nack):
-        logging.info("Received top")
+        client_id, fruit, amount = message_protocol.internal.deserialize(message)
+        logging.info(f"Join | Received top fruit | client: {client_id} | fruit: {fruit} | amount: {amount}")
         fruit_top = message_protocol.internal.deserialize(message)
         self.output_queue.send(message_protocol.internal.serialize(fruit_top))
+        logging.info(f"Join | Sending top")
         ack()
 
     def start(self):
+        logging.info("Join | Starting to consume messages")
         self.input_queue.start_consuming(self.process_messsage)
 
 

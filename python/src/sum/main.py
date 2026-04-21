@@ -29,12 +29,6 @@ class SumFilter:
         self.control_queue = middleware.FanoutQueueRabbitMQ(MOM_HOST, f"{SUM_CONTROL_QUEUE}-{ID}", SUM_CONTROL_EXCHANGE)
         self.data_output_exchange = middleware.DirectExchangeRabbitMQ(MOM_HOST,AGGREGATION_EXCHANGE)
 
-    def _process_data(self, client_id, fruit, amount):
-        amount_by_fruit = self.amount_by_fruit_by_client.setdefault(client_id, {})
-        amount_by_fruit[fruit] = amount_by_fruit.get(
-            fruit, fruit_item.FruitItem(fruit, 0)
-        ) + fruit_item.FruitItem(fruit, int(amount))
-
     # procesa de la exchange de control
     def _run_control_polling(self):
         logging.info(f"Sum ID: {ID} | Starting control polling thread")
@@ -77,9 +71,11 @@ class SumFilter:
                 routing_key
             )
 
+        logging.info(f"Sum ID: {ID} | Send to aggregation | client: {client_id} | Finished processing EOF")
+
         if client_id in self.amount_by_fruit_by_client:
             del self.amount_by_fruit_by_client[client_id]
-        logging.info(f"Sum ID: {ID} | Send to aggregation | client: {client_id} | Finished processing EOF")
+        logging.info(f"Sum ID: {ID} | client: {client_id} | Cleaned up internal state")
 
     # procesa de la queue de ingreso  
     def process_data_messsage(self, message, ack, nack):
@@ -104,6 +100,12 @@ class SumFilter:
                 )
 
         ack()
+        
+    def _process_data(self, client_id, fruit, amount):
+        amount_by_fruit = self.amount_by_fruit_by_client.setdefault(client_id, {})
+        amount_by_fruit[fruit] = amount_by_fruit.get(
+            fruit, fruit_item.FruitItem(fruit, 0)
+        ) + fruit_item.FruitItem(fruit, int(amount))
 
     def start(self):
         control_thread = threading.Thread(

@@ -6,7 +6,7 @@ DIRECT_EXCHANGE_TYPE = 'direct'
 FANOUT_EXCHANGE_TYPE = 'fanout'
 
 class MessageMiddlewareQueueRabbitMQ(RabbitMQBase):
-    def __init__(self, host, queue_name, exchange_name=None, exchange_type=None):
+    def __init__(self, host, queue_name, exchange_name=None, exchange_type=DIRECT_EXCHANGE_TYPE):
         super().__init__(host)
         self.queue_name = queue_name
         self._declare_queue()
@@ -84,7 +84,7 @@ class MessageMiddlewareExchangeRabbitMQ(RabbitMQBase):
 
 class DirectQueueRabbitMQ(MessageMiddlewareQueueRabbitMQ):
     def __init__(self, host, queue_name, exchange_name=None):
-        super().__init__(host, queue_name, exchange_name, DIRECT_EXCHANGE_TYPE)
+        super().__init__(host, queue_name, exchange_name)
 
 class FanoutQueueRabbitMQ(MessageMiddlewareQueueRabbitMQ):
     def __init__(self, host, queue_name, exchange_name=None):
