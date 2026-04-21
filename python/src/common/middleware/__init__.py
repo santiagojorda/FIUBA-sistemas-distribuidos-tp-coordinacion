@@ -2,6 +2,8 @@ from .middleware_rabbitmq import (
     MessageMiddlewareQueueRabbitMQ,
     MessageMiddlewareExchangeRabbitMQ,
     FanoutExchangeRabbitMQ,
-    DirectExchangeRabbitMQ
+    DirectExchangeRabbitMQ,
+    DirectQueueRabbitMQ,
+    FanoutQueueRabbitMQ
 )
 
