@@ -14,6 +14,7 @@ AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 AGGREGATION_CONTROL_EXCHANGE = f"{AGGREGATION_PREFIX}_CONTROL_EXCHANGE"
 AGGREGATION_CONTROL_QUEUE = f"{AGGREGATION_PREFIX}_CONTROL_QUEUE"
 AGGREGATION_EXCHANGE = f"{AGGREGATION_PREFIX}_EXCHANGE"
+JOIN_EXCHANGE = "JOIN_EXCHANGE"
 TOP_SIZE = int(os.environ["TOP_SIZE"])
 
 AMOUNT_FIELDS_DATA = 3
@@ -24,23 +25,18 @@ class AggregationFilter:
         logging.info(f"Aggregation ID: {ID} | Starting aggregation filter")
 
         self.eof_received_by_client = {}
-        self.fruit_top_by_client = {}
+        self.totals_by_client = {}
         self.input_queue = middleware.DirectQueueRabbitMQ(MOM_HOST, f"{AGGREGATION_PREFIX}-{ID}", AGGREGATION_EXCHANGE)
         self.output_exchange = middleware.DefaultExchangeRabbitMQ(MOM_HOST)
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Aggregation ID: {ID} | Processing data message | client: {client_id} | fruit: {fruit} | amount: {amount}")
-        if client_id not in self.fruit_top_by_client:
-            self.fruit_top_by_client[client_id] = []
-            
-        client_top = self.fruit_top_by_client[client_id]
+        if client_id not in self.totals_by_client:
+            self.totals_by_client[client_id] = {} 
 
-        for i in range(len(client_top)):
-            if client_top[i].fruit == fruit:
-                client_top[i] = client_top[i] + fruit_item.FruitItem(fruit, amount)
-                return
-                
-        bisect.insort(client_top, fruit_item.FruitItem(fruit, amount))
+        client_data = self.totals_by_client[client_id]
+        current_item = client_data.get(fruit, fruit_item.FruitItem(fruit, 0))
+        client_data[fruit] = current_item + fruit_item.FruitItem(fruit, int(amount))
 
     def _process_eof(self, client_id):
         self.eof_received_by_client[client_id] = self.eof_received_by_client.get(client_id, 0) + 1
@@ -51,25 +47,20 @@ class AggregationFilter:
         if current_eofs == SUM_AMOUNT:
             logging.info(f"Aggregation ID: {ID} | client: {client_id} | All EOFs received. Calculating Top.")
             
-            client_top = self.fruit_top_by_client.get(client_id, [])
-            
-            fruit_chunk = list(client_top[-TOP_SIZE:])
-            fruit_chunk.reverse()
-            
-            fruit_top_serialized = list(
-                map(
-                    lambda item: (item.fruit, item.amount),
-                    fruit_chunk,
-                )
+            client_data = self.totals_by_client.get(client_id, {})
+            sorted_fruits = sorted(
+                client_data.values(), 
+                key=lambda x: x.amount, 
+                reverse=True
             )
             
+            fruit_top_serialized = [(item.fruit, item.amount) for item in sorted_fruits[:TOP_SIZE]]
             logging.info(f"Aggregation ID: {ID} | client: {client_id} | FINAL TOP: {fruit_top_serialized}")
-            
             logging.info(f"Aggregation ID: {ID} | client: {client_id} | Sending top to join")
             self.output_exchange.send(message_protocol.internal.serialize(fruit_top_serialized), OUTPUT_QUEUE)
             
             self.eof_received_by_client.pop(client_id, None)
-            self.fruit_top_by_client.pop(client_id, None)
+            self.totals_by_client.pop(client_id, None)
             logging.info(f"Aggregation ID: {ID} | client: {client_id} | Cleaned up internal state for client")
 
     def process_messsage(self, message, ack, nack):
@@ -86,7 +77,6 @@ class AggregationFilter:
 
     def start(self):
         self.input_queue.start_consuming(self.process_messsage)
-
 
 def main():
     logging.basicConfig(level=logging.INFO)

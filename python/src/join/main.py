@@ -41,7 +41,7 @@ class JoinFilter:
 
 
 def main(): 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.WARNING)
     join_filter = JoinFilter()
     join_filter.start()
 
