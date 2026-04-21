@@ -1,10 +1,31 @@
 
 import pika
+from functools import wraps
 from .middleware import (
     MessageMiddlewareCloseError, 
     MessageMiddlewareDisconnectedError, 
     MessageMiddlewareMessageError
 )
+
+def handle_pika_errors(action_name):
+    """Decorador para atrapar excepciones de Pika sin repetir código."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except pika.exceptions.AMQPConnectionError as e:
+                self._cleanup_resources()
+                raise MessageMiddlewareDisconnectedError(f"Conexión perdida al {action_name}") from e
+            except pika.exceptions.AMQPChannelError as e:
+                self._cleanup_resources()
+                raise MessageMiddlewareMessageError(f"Error de canal al {action_name}") from e
+            except Exception as e:
+                self._cleanup_resources()
+                raise MessageMiddlewareMessageError(f"Error interno inesperado al {action_name}") from e
+        return wrapper
+    return decorator
+
 
 class RabbitMQBase:
     def __init__(self, host):
@@ -31,30 +52,6 @@ class RabbitMQBase:
                 pass
         self.channel = None
         self.connection = None
-
-    def _build_internal_callback(self, on_message_callback):
-        def internal_callback(ch, method, properties, body):
-            on_message_callback(
-                body,
-                lambda: ch.basic_ack(delivery_tag=method.delivery_tag),
-                lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True),
-            )
-
-        return internal_callback
-
-    def stop_consuming(self):
-        try:
-            if self.channel:
-                self.channel.stop_consuming()
-        except pika.exceptions.AMQPConnectionError as e:
-            self._cleanup_resources()
-            raise MessageMiddlewareDisconnectedError("Conexión perdida con RabbitMQ") from e
-        except pika.exceptions.AMQPChannelError as e:
-            self._cleanup_resources()
-            raise MessageMiddlewareMessageError("Error en el canal de RabbitMQ") from e
-        except Exception as e:
-            self._cleanup_resources()
-            raise MessageMiddlewareMessageError("Error interno inesperado") from e
 
     def close(self):
         try:
