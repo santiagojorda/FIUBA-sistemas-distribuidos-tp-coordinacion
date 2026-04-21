@@ -1,16 +1,6 @@
-from .middleware_ingesting import (
+from .middleware_rabbitmq import (
     MessageMiddlewareQueueRabbitMQ,
-    MessageMiddlewareExchangeRabbitMQ
+    MessageMiddlewareExchangeRabbitMQ,
+    MessageMiddlewareFanoutExchangeRabbitMQ
 )
-
-from .middleware_sum_control import (
-    MessageMiddlewareSumWorkerControlQueue,
-    MessageMiddlewareSumWorkerControlExchange
-)
-
-from .middleware_sum_aggregation_partitioned import (
-    MessageMiddlewareSumAggregationPartitionedExchangeRabbitMQ,
-    MessageMiddlewareSumAggregationPartitionedQueueRabbitMQ,
-)
-
 

@@ -33,8 +33,8 @@ class SumFilter:
             MOM_HOST, INPUT_QUEUE
         )
 
-        self.control_exchange = middleware.MessageMiddlewareSumWorkerControlExchange(MOM_HOST)
-        self.control_queue = middleware.MessageMiddlewareSumWorkerControlQueue(MOM_HOST, ID)
+        self.control_exchange = middleware.MessageMiddlewareSumWorkerControlExchange(MOM_HOST, SUM_CONTROL_EXCHANGE)
+        self.control_queue = middleware.MessageMiddlewareSumWorkerControlQueue(MOM_HOST, f"{SUM_CONTROL_QUEUE}-{ID}")
 
         self.data_output_exchange = (
             middleware.MessageMiddlewareSumAggregationPartitionedExchangeRabbitMQ(
