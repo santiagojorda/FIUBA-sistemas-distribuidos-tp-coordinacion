@@ -14,7 +14,6 @@ AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 AGGREGATION_CONTROL_EXCHANGE = f"{AGGREGATION_PREFIX}_CONTROL_EXCHANGE"
 AGGREGATION_CONTROL_QUEUE = f"{AGGREGATION_PREFIX}_CONTROL_QUEUE"
 AGGREGATION_EXCHANGE = f"{AGGREGATION_PREFIX}_EXCHANGE"
-JOIN_EXCHANGE = "JOIN_EXCHANGE"
 TOP_SIZE = int(os.environ["TOP_SIZE"])
 
 AMOUNT_FIELDS_DATA = 3
@@ -27,7 +26,7 @@ class AggregationFilter:
         self.eof_received_by_client = {}
         self.fruit_top_by_client = {}
         self.input_queue = middleware.DirectQueueRabbitMQ(MOM_HOST, f"{AGGREGATION_PREFIX}-{ID}", AGGREGATION_EXCHANGE)
-        self.output_exchange = middleware.DirectExchangeRabbitMQ(MOM_HOST, JOIN_EXCHANGE)
+        self.output_exchange = middleware.DefaultExchangeRabbitMQ(MOM_HOST)
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Aggregation ID: {ID} | Processing data message | client: {client_id} | fruit: {fruit} | amount: {amount}")
@@ -67,7 +66,7 @@ class AggregationFilter:
             logging.info(f"Aggregation ID: {ID} | client: {client_id} | FINAL TOP: {fruit_top_serialized}")
             
             logging.info(f"Aggregation ID: {ID} | client: {client_id} | Sending top to join")
-            self.output_exchange.send(message_protocol.internal.serialize(fruit_top_serialized))
+            self.output_exchange.send(message_protocol.internal.serialize(fruit_top_serialized), OUTPUT_QUEUE)
             
             self.eof_received_by_client.pop(client_id, None)
             self.fruit_top_by_client.pop(client_id, None)

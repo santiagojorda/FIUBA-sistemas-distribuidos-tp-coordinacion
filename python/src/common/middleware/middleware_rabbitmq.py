@@ -81,6 +81,17 @@ class MessageMiddlewareExchangeRabbitMQ(RabbitMQBase):
             body=message
         )
 
+class DefaultExchangeRabbitMQ(RabbitMQBase):    
+    def __init__(self, host):
+        super().__init__(host)
+
+    @handle_pika_errors("enviar mensaje (default exchange)")
+    def send(self, message, routing_key):
+        self.channel.basic_publish(
+            exchange='',
+            routing_key=routing_key,
+            body=message
+        )
 
 class DirectQueueRabbitMQ(MessageMiddlewareQueueRabbitMQ):
     def __init__(self, host, queue_name, exchange_name=None):

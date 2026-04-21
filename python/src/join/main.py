@@ -11,7 +11,6 @@ SUM_PREFIX = os.environ["SUM_PREFIX"]
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 TOP_SIZE = int(os.environ["TOP_SIZE"])
-JOIN_EXCHANGE = "JOIN_EXCHANGE"
 
 class JoinFilter:
 
@@ -21,8 +20,8 @@ class JoinFilter:
         self.eof_received_by_client = {}
         self.fruit_top_by_client = {}
 
-        self.input_queue = middleware.DirectQueueRabbitMQ(
-            MOM_HOST, INPUT_QUEUE, JOIN_EXCHANGE
+        self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
+            MOM_HOST, INPUT_QUEUE
         )
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
@@ -41,7 +40,7 @@ class JoinFilter:
         self.input_queue.start_consuming(self.process_messsage)
 
 
-def main():
+def main(): 
     logging.basicConfig(level=logging.INFO)
     join_filter = JoinFilter()
     join_filter.start()

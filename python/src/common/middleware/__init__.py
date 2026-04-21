@@ -4,6 +4,7 @@ from .middleware_rabbitmq import (
     FanoutExchangeRabbitMQ,
     DirectExchangeRabbitMQ,
     DirectQueueRabbitMQ,
-    FanoutQueueRabbitMQ
+    FanoutQueueRabbitMQ,
+    DefaultExchangeRabbitMQ
 )
 
