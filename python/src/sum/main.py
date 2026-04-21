@@ -5,9 +5,9 @@ import threading
 from common import middleware, message_protocol, fruit_item
 from common.middleware import (
     MessageMiddlewareQueueRabbitMQ,
-    MessageMiddlewareSumAggregationPartitionedExchangeRabbitMQ,
-    MessageMiddlewareSumWorkerControlQueue,
-    MessageMiddlewareSumWorkerControlExchange
+    MessageMiddlewareExchangeRabbitMQ,
+    FanoutExchangeRabbitMQ,
+    DirectExchangeRabbitMQ
 )
 
 ID = int(os.environ["ID"])
@@ -18,6 +18,7 @@ SUM_PREFIX = os.environ["SUM_PREFIX"]
 SUM_CONTROL_EXCHANGE = "SUM_CONTROL_EXCHANGE"
 SUM_CONTROL_QUEUE = "SUM_CONTROL_QUEUE"
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
+AGGREGATION_EXCHANGE = "AGGREGATION_EXCHANGE"
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 COUNT_OF_FIELDS_IN_DATA_MESSAGE = 3
 
@@ -29,28 +30,16 @@ class SumFilter:
         self.eof_received_by_client = {}
         self.amount_by_fruit_by_client = {}
 
-        self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
-            MOM_HOST, INPUT_QUEUE
-        )
-
-        self.control_exchange = middleware.MessageMiddlewareSumWorkerControlExchange(MOM_HOST, SUM_CONTROL_EXCHANGE)
-        self.control_queue = middleware.MessageMiddlewareSumWorkerControlQueue(MOM_HOST, f"{SUM_CONTROL_QUEUE}-{ID}")
-
-        self.data_output_exchange = (
-            middleware.MessageMiddlewareSumAggregationPartitionedExchangeRabbitMQ(
-                MOM_HOST,
-                AGGREGATION_PREFIX,
-                AGGREGATION_PREFIX,
-                AGGREGATION_AMOUNT,
-            )
-        )
+        self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, INPUT_QUEUE)
+        self.control_exchange = middleware.FanoutExchangeRabbitMQ(MOM_HOST, SUM_CONTROL_EXCHANGE)
+        self.control_queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, f"{SUM_CONTROL_QUEUE}-{ID}")
+        self.data_output_exchange = middleware.DirectExchangeRabbitMQ(MOM_HOST,AGGREGATION_EXCHANGE)
 
     def _process_data(self, client_id, fruit, amount):
         amount_by_fruit = self.amount_by_fruit_by_client.setdefault(client_id, {})
         amount_by_fruit[fruit] = amount_by_fruit.get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
-
 
     # procesa de la exchange de control
     def _run_control_polling(self):
@@ -75,11 +64,15 @@ class SumFilter:
         amount_by_fruit = self.amount_by_fruit_by_client.get(client_id, {})
         
         for final_fruit_item in amount_by_fruit.values():
+            
+            shared_id = abs(hash(final_fruit_item.fruit)) % AGGREGATION_AMOUNT
+            routing_key = f"{AGGREGATION_PREFIX}-{shared_id}"
+            
             self.data_output_exchange.send(
                 message_protocol.internal.serialize(
                     [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                 ),
-                final_fruit_item.fruit,
+                routing_key
             )
         if client_id in self.amount_by_fruit_by_client:
             del self.amount_by_fruit_by_client[client_id]
