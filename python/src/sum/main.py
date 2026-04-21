@@ -52,7 +52,6 @@ class SumFilter:
     def _process_control_eof(self, client_id):
         with self.lock:
             if self.eof_received_by_client.get(client_id, False):
-                logging.error(f"¡PERDIDA DE DATOS! Mensaje recibido de cliente {client_id} POST-EOF")
                 return
 
             self.eof_received_by_client[client_id] = True
@@ -63,7 +62,6 @@ class SumFilter:
             logging.info(f"Sum ID: {ID} | client: {client_id} | Forwarding data to aggregators. Fruits")
             for final_fruit_item in amount_by_fruit.values():
                 shard_id = self.get_aggregator_shard(final_fruit_item.fruit)
-                logging.info(f"DEBUG | client_id {client_id} | Fruit {final_fruit_item.fruit} (Initial: {final_fruit_item.fruit[0]}) -> Shard {shard_id}")
                 routing_key = f"{AGGREGATION_PREFIX}-{shard_id}"
                 self.data_output_exchange.send(
                     message_protocol.internal.serialize([client_id, final_fruit_item.fruit, final_fruit_item.amount]),
@@ -104,6 +102,9 @@ class SumFilter:
 
     def _process_data(self, client_id, fruit, amount):
         with self.lock:
+            if self.eof_received_by_client.get(client_id, False):
+                logging.error(f"!!! RACE CONDITION EN SUM: Mensaje de datos llegó DESPUÉS del EOF para cliente {client_id} (Fruta: {fruit})")
+                return
             amount_by_fruit = self.amount_by_fruit_by_client.setdefault(client_id, {})
             amount_by_fruit[fruit] = amount_by_fruit.get(
                 fruit, fruit_item.FruitItem(fruit, 0)
@@ -120,7 +121,7 @@ class SumFilter:
         self.input_queue.start_consuming(self.process_data_messsage)
 
 def main():
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO)
     sum_filter = SumFilter()
     sum_filter.start()
     return 0
