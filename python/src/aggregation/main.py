@@ -26,18 +26,22 @@ class AggregationFilter:
 
         self.eof_received_by_client = {}
         self.totals_by_client = {}
+        self.finished_clients = set()
         self.input_queue = middleware.DirectQueueRabbitMQ(MOM_HOST, f"{AGGREGATION_PREFIX}-{ID}", AGGREGATION_EXCHANGE)
         self.output_exchange = middleware.DefaultExchangeRabbitMQ(MOM_HOST)
 
     def _process_data(self, client_id, fruit, amount):
-        # logging.info(f"Aggregation ID: {ID} | Processing data message | client: {client_id} | fruit: {fruit} | amount: {amount}")
+        if client_id in self.finished_clients:
+            logging.error(f"!!! RACE CONDITION REAL: Datos del cliente {client_id} post-cierre")
+            return 
+            
         if client_id not in self.totals_by_client:
+            # Es el primer mensaje del cliente, inicializamos sin llorar
             self.totals_by_client[client_id] = {} 
 
         client_data = self.totals_by_client[client_id]
         current_item = client_data.get(fruit, fruit_item.FruitItem(fruit, 0))
         client_data[fruit] = current_item + fruit_item.FruitItem(fruit, int(amount))
-
     def _process_eof(self, client_id):
         self.eof_received_by_client[client_id] = self.eof_received_by_client.get(client_id, 0) + 1
         current_eofs = self.eof_received_by_client[client_id]
@@ -64,6 +68,7 @@ class AggregationFilter:
             
             self.eof_received_by_client.pop(client_id, None)
             self.totals_by_client.pop(client_id, None)
+            self.finished_clients.add(client_id)
             # logging.info(f"Aggregation ID: {ID} | client: {client_id} | Cleaned up internal state for client")
 
     def process_messsage(self, message, ack, nack):

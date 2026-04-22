@@ -21,8 +21,10 @@ class SumFilter:
         logging.info(f"Starting sum filter with ID {ID}")
         
         self.eof_received_by_client = {}
+        self.condition = threading.Condition()
+
         self.amount_by_fruit_by_client = {}
-        self.lock = threading.Lock()
+        # self.lock = threading.Lock()
 
         self.input_queue = middleware.DirectQueueRabbitMQ(MOM_HOST, INPUT_QUEUE)
         self.control_exchange = middleware.FanoutExchangeRabbitMQ(MOM_HOST, SUM_CONTROL_EXCHANGE)
@@ -50,65 +52,63 @@ class SumFilter:
       return letter_index % AGGREGATION_AMOUNT
 
     def _process_control_eof(self, client_id):
-        with self.lock:
-            if self.eof_received_by_client.get(client_id, False):
-                return
-
+        with self.condition:
             self.eof_received_by_client[client_id] = True
-            
-            # Obtenemos los datos. Si no hay nada, mandamos un dict vacío para no fallar.
+            logging.info(f"Sum ID: {ID} | client: {client_id} | Waiting residual data from message queue...")
+            self.condition.wait(timeout=5)
+
             amount_by_fruit = self.amount_by_fruit_by_client.get(client_id, {})
-            
-            logging.info(f"Sum ID: {ID} | client: {client_id} | Forwarding data to aggregators. Fruits")
-            for final_fruit_item in amount_by_fruit.values():
-                shard_id = self.get_aggregator_shard(final_fruit_item.fruit)
-                routing_key = f"{AGGREGATION_PREFIX}-{shard_id}"
-                self.data_output_exchange.send(
-                    message_protocol.internal.serialize([client_id, final_fruit_item.fruit, final_fruit_item.amount]),
-                    routing_key
-                )
+            self.eof_received_by_client.pop(client_id, None)
 
-            for aggregation_id in range(AGGREGATION_AMOUNT):
-                routing_key = f"{AGGREGATION_PREFIX}-{aggregation_id}"
-                self.data_output_exchange.send(message_protocol.internal.serialize_control(client_id), routing_key)
+        logging.info(f"Sum ID: {ID} | client: {client_id} | Forwarding data to aggregators. Fruits")
+        for final_fruit_item in amount_by_fruit.values():
+            shard_id = self.get_aggregator_shard(final_fruit_item.fruit)
+            routing_key = f"{AGGREGATION_PREFIX}-{shard_id}"
+            self.data_output_exchange.send(
+                message_protocol.internal.serialize([client_id, final_fruit_item.fruit, final_fruit_item.amount]),
+                routing_key
+            )
 
-            if client_id in self.amount_by_fruit_by_client:
-                logging.info(f"Sum ID: {ID} | client: {client_id} | Cleaned up internal state for client.")
-                self.amount_by_fruit_by_client[client_id] = {}
+        for aggregation_id in range(AGGREGATION_AMOUNT):
+            routing_key = f"{AGGREGATION_PREFIX}-{aggregation_id}"
+            self.data_output_exchange.send(message_protocol.internal.serialize_control(client_id), routing_key)
+
+        logging.info(f"Sum ID: {ID} | client: {client_id} | Cleaned up internal state for client.")
+        self.amount_by_fruit_by_client.pop(client_id, None)
 
     # procesa de la queue de ingreso  
     def process_data_messsage(self, message, ack, nack):
         fields = message_protocol.internal.deserialize(message)
         if len(fields) == COUNT_OF_FIELDS_IN_DATA_MESSAGE:
-            client_id, fruit, amount = fields
-            logging.info(
-                f"Sum ID: {ID} | Message received | client: {client_id} | fruit: {fruit} | amount: {amount}"
-            )
-            self._process_data(*fields)
+            with self.condition:
+                client_id, fruit, amount = fields
+                logging.info(f"Sum ID: {ID} | Message received | client: {client_id} | fruit: {fruit} | amount: {amount}")
+                is_eof = self._process_data(*fields)
+                if is_eof:
+                    self._send_eof_to_control_exchange(client_id)
+                    logging.info(f"Sum ID: {ID} | client: {client_id} | Condition EOF received in data message. Forwarding to control exchange.")
+                    self.condition.notify_all()
         else:
-            client_id = int(fields[0])
-            logging.info(
-                f"Sum ID: {ID} | Message received | client: {client_id} | EOF"
-            )
-            if not self.eof_received_by_client.get(client_id, False):
-                logging.info(
-                    f"Sum ID: {ID} | Control exchange | client: {client_id} | Forwarding EOF"
-                )
-                self.control_exchange.send(
-                    message_protocol.internal.serialize_control(client_id)
-                )
+            self._send_eof_to_control_exchange(fields[0])
 
         ack()
 
+    def _send_eof_to_control_exchange(self, client_id):
+          client_id = int(client_id)
+          logging.info(f"Sum ID: {ID} | Message received | client: {client_id} | EOF")
+          self.control_exchange.send(message_protocol.internal.serialize_control(client_id))
+          logging.info(f"Sum ID: {ID} | Control exchange | client: {client_id} | Forwarding EOF")
+
     def _process_data(self, client_id, fruit, amount):
-        with self.lock:
-            if self.eof_received_by_client.get(client_id, False):
-                logging.error(f"!!! RACE CONDITION EN SUM: Mensaje de datos llegó DESPUÉS del EOF para cliente {client_id} (Fruta: {fruit})")
-                return
             amount_by_fruit = self.amount_by_fruit_by_client.setdefault(client_id, {})
             amount_by_fruit[fruit] = amount_by_fruit.get(
                 fruit, fruit_item.FruitItem(fruit, 0)
             ) + fruit_item.FruitItem(fruit, int(amount))
+        
+            if self.eof_received_by_client.get(client_id, False):
+                logging.error(f"Habia una fruta residual en la cola de mensajes para el cliente {client_id} despues de recibir EOF. Ignorando mensaje.")
+                return True
+            return False
 
     def start(self):
         control_thread = threading.Thread(
