@@ -72,10 +72,9 @@ class SumFilter:
         for aggregation_id in range(AGGREGATION_AMOUNT):
             routing_key = f"{AGGREGATION_PREFIX}-{aggregation_id}"
             self.data_output_exchange.send(message_protocol.internal.serialize_control(client_id), routing_key)
-
         logging.info(f"Sum ID: {ID} | client: {client_id} | Cleaned up internal state for client.")
         self.amount_by_fruit_by_client.pop(client_id, None)
-
+        
     # procesa de la queue de ingreso  
     def process_data_messsage(self, message, ack, nack):
         fields = message_protocol.internal.deserialize(message)
@@ -85,7 +84,6 @@ class SumFilter:
                 logging.info(f"Sum ID: {ID} | Message received | client: {client_id} | fruit: {fruit} | amount: {amount}")
                 is_eof = self._process_data(*fields)
                 if is_eof:
-                    self._send_eof_to_control_exchange(client_id)
                     logging.info(f"Sum ID: {ID} | client: {client_id} | Condition EOF received in data message. Forwarding to control exchange.")
                     self.condition.notify_all()
         else:

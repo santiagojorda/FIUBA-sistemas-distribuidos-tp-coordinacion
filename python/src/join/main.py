@@ -49,8 +49,10 @@ class JoinFilter:
             final_top = sorted_global[:TOP_SIZE]
             
             logging.info(f"Join | Sending FINAL GLOBAL TOP | client: {client_id} | top: {final_top}")
-            
-            self.output_queue.send(message_protocol.internal.serialize(final_top))
+
+            self.output_queue.send(
+                message_protocol.internal.serialize([client_id, final_top])
+            )
             
             del self.fruit_top_by_client[client_id]
             del self.eof_received_by_client[client_id]
