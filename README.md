@@ -1,81 +1,151 @@
-# Trabajo Práctico - Coordinación
+# TP-COORDINACION
 
-En este trabajo se busca familiarizar a los estudiantes con los desafíos de la coordinación del trabajo y el control de la complejidad en sistemas distribuidos. Para tal fin se provee un esqueleto de un sistema de control de stock de una verdulería y un conjunto de escenarios de creciente grado de complejidad y distribución que demandarán mayor sofisticación en la comunicación de las partes involucradas.
+---
 
-## Ejecución
+La solución implementa una arquitectura distribuida por etapas sobre RabbitMQ para calcular un top global de frutas por cliente.
 
-`make up` : Inicia los contenedores del sistema y comienza a seguir los logs de todos ellos en un solo flujo de salida.
+El procesamiento se divide en tres filtros principales:
+- Sum: acumula cantidades parciales por fruta para cada cliente y distribuye resultados hacia Aggregation.
+- Aggregation: recibe resultados de múltiples instancias Sum, consolida por cliente y emite un top local.
+- Join: recibe tops locales de todas las instancias Aggregation y calcula el top final global por cliente.
 
-`make down`:   Detiene los contenedores y libera los recursos asociados.
 
-`make logs`: Sigue los logs de todos los contenedores en un solo flujo de salida.
+### Capa de Middleware y Modelo de Comunicación
+La capa de middleware abstrae RabbitMQ con dos tipos principales:
+- Colas (Queue): para consumo punto a punto.
+- Exchanges (Direct/Fanout): para ruteo por clave o broadcast.
 
-`make test`: Inicia los contenedores del sistema, espera a que los clientes finalicen, compara los resultados con una ejecución serial y detiene los contenederes.
+Cada consumidor trabaja con callback de mensaje que recibe tres elementos:
+- message: payload
+- ack: confirmación de procesamiento exitoso
+- nack: rechazo con posibilidad de requeue
 
-`make switch`: Permite alternar rápidamente entre los archivos de docker compose de los distintos escenarios provistos.
+Además, el middleware define operaciones de ciclo de vida:
+- start_consuming
+- stop_consuming
+- send
+- close
 
-## Elementos del sistema objetivo
+Esto desacopla lógica de negocio del detalle de transporte.
 
-![ ](./imgs/diagrama_de_robustez.jpg  "Diagrama de Robustez")
-*Fig. 1: Diagrama de Robustez*
+--- 
 
-### Client
+### Componente Sum
+#### Responsabilidad principal:
 
-Lee un archivo de entrada y envía por TCP/IP pares (fruta, cantidad) al sistema.
-Cuando finaliza el envío de datos, aguarda un top de pares (fruta, cantidad) y vuelca el resultado en un archivo de salida csv.
-El criterio y tamaño del top dependen de la configuración del sistema. Por defecto se trata de un top 3 de frutas de acuerdo a la cantidad total almacenada.
+- Recibir registros de fruta por cliente.
+- Acumular totales por fruta.
+- Sincronizar fin de datos (EOF) por cliente.
+- Enviar los acumulados de frutas a los Aggregation, de acuerdo a una función de partición.
+- Enviar señal de control EOF a cada Aggregation para cerrar la etapa.
 
-### Gateway
+#### Lógica clave:
 
-Es el punto de entrada y salida del sistema. Intercambia mensajes con los clientes y las colas internas utilizando distintos protocolos.
+- Mantiene un diccionario por cliente con acumulados por fruta.
+Tiene un hilo separado para consumir mensajes de control.
+- Cuando detecta EOF de control para un cliente, espera un breve período para procesar los mensajes residuales.
+- Luego envía cada fruta acumulada al aggregation correspondiente según una función de partición.
+- Finalmente envía un EOF a todas las instancias de Aggregation para ese cliente.
 
-### Sum
- 
-Recibe pares  (fruta, cantidad) y aplica la función Suma de la clase `FruitItem`. Por defecto esa suma es la canónica para los números enteros, ej:
+#### Concurrencia:
+Usa Condition para coordinar llegada de datos y señal de control.
+El hilo de control y el hilo consumidor principal comparten estado por cliente.
 
-`("manzana", 5) + ("manzana", 8) = ("manzana", 13)`
+#### Apagado:
+- Implementa manejo de señales para shutdown ordenado.
+- Detiene consumo, espera finalización del hilo de control y cierra.
 
-Pero su implementación podría modificarse.
-Cuando se detecta el final de la ingesta de datos envía los pares (fruta, cantidad) totales a los Aggregators.
+--- 
 
-### Aggregator
+### Aggregation
+El componente Aggregation actúa como una etapa intermedia de reducción. Su objetivo es recibir los resultados parciales provenientes de Sum, consolidarlos por cliente y producir un top local que luego será enviado a Join.
 
-Consolida los datos de las distintas instancias de Sum.
-Cuando se detecta el final de la ingesta, se calcula un top parcial y se envía esa información al Joiner.
+#### Responsabilidades principales
 
-### Joiner
+Consumir mensajes de datos y de control (EOF) desde su cola de entrada.
+Acumular cantidades por fruta para cada cliente.
+Detectar cuándo recibió todos los EOF esperados de ese cliente.
+Calcular el top local de frutas y enviarlo a la cola de salida.
+Limpiar el estado en memoria del cliente una vez finalizado.
 
-Recibe tops parciales de las instancias del Aggregator.
-Cuando se detecta el final de la ingesta, se envía el top final hacia el gateway para ser entregado al cliente.
+#### Estructuras de estado
 
-## Limitaciones del esqueleto provisto
+totals_by_client: diccionario que guarda, para cada cliente, otro diccionario fruta -> total acumulado.
+eof_received_by_client: contador de EOF recibidos por cliente.
+finished_clients: conjunto de clientes ya cerrados, para ignorar datos tardíos y evitar reprocesamiento.
 
-La implementación base respeta la división de responsabilidades de los distintos controles y hace uso de la clase `FruitItem` como un elemento opaco, sin asumir la implementación de las funciones de Suma y Comparación.
+#### Flujo de procesamiento
+Llega un mensaje.
+Si es de datos (client_id, fruit, amount), se suma amount al acumulado de esa fruta para ese cliente.
+Si es EOF, se incrementa el contador de EOF del cliente.
+Cuando EOFs == SUM_AMOUNT, se considera completa la entrada para ese cliente.
+Se ordenan las frutas por cantidad descendente, se toma TOP_SIZE y se serializa el top local.
+Se publica el resultado hacia Join.
+Se eliminan del estado interno los datos del cliente (contadores y acumulados), y se lo marca como finalizado.
 
-No obstante, esta implementación no cubre los objetivos buscados tal y como es presentada. Entre sus falencias puede destactarse que:
+#### Sincronización lógica
+Aggregation implementa una barrera por cliente: no emite resultado final hasta recibir todas las señales de fin esperadas desde Sum. Esto garantiza consistencia, evitando calcular top con datos incompletos.
 
- - No se implementa la interfaz del middleware. 
- - No se dividen los flujos de datos de los clientes más allá del Gateway, por lo que no se es capaz de resolver múltiples consultas concurrentemente.
- - No se implementan mecanismos de sincronización que permitan escalar los controles Sum y Aggregator. En particular:
-   - Las instancias de Sum se dividen el trabajo, pero solo una de ellas recibe la notificación de finalización en la ingesta de datos.
-   - Las instancias de Sum realizan _broadcast_ a todas las instancias de Aggregator, en lugar de agrupar los datos por algún criterio y evitar procesamiento redundante.
-  - No se maneja la señal SIGTERM, con la salvedad de los clientes y el Gateway.
+### Tolerancia a mensajes tardíos
+Si llegan datos de un cliente que ya fue cerrado (finished_clients), se registran como condición anómala y no se reprocesan. Esto protege al sistema frente a desorden o retrasos en la red/middleware.
 
-## Condiciones de Entrega
+#### Salida de Aggregation
+El mensaje de salida contiene:
 
-El código de este repositorio se agrupa en dos carpetas, una para Python y otra para Golang. Los estudiantes deberán elegir **sólo uno** de estos lenguajes y realizar una implementación que funcione correctamente ante cambios en la multiplicidad de los controles (archivo de docker compose), los archivos de entrada y las implementaciones de las funciones de Suma y Comparación del `FruitItem`.
+client_id
+fruit_top_serialized (lista de pares (fruit, amount))
+Ese payload representa el top local de esa instancia de Aggregation y será combinado luego por Join para obtener el top global.
 
-![ ](./imgs/mutabilidad.jpg  "Mutabilidad de Elementos")
-*Fig. 2: Elementos mutables e inmutables*
 
-A modo de referencia, en la *Figura 2* se marcan en tonos oscuros los elementos que los estudiantes no deben alterar y en tonos claros aquellos sobre los que tienen libertad de decisión.
-Al momento de la evaluación y ejecución de las pruebas se **descartarán** o **reemplazarán** :
+---
+### Componente Join
+#### Responsabilidad principal:
 
-- Los archivos de entrada de la carpeta `datasets`.
-- El archivo docker compose principal y los de la carpeta `scenarios`.
-- Todos los archivos Dockerfile.
-- Todo el código del cliente.
-- Todo el código del gateway, salvo `message_handler`.
-- La implementación del protocolo de comunicación externo y `FruitItem`.
+Recibir tops locales desde todas las instancias Aggregation.
+Hacer barrera por cliente.
+Generar top global final por cliente.
+Enviar resultado al siguiente consumidor (por ejemplo gateway/cola de salida).
+#### Lógica clave:
 
-Redactar un breve informe explicando el modo en que se coordinan las instancias de Sum y Aggregation, así como el modo en el que el sistema escala respecto a los clientes y a la cantidad de controles.
+Para cada cliente, suma cantidades de frutas repetidas entre tops locales.
+Lleva contador de cuántos tops locales llegaron.
+Cuando llega la cantidad esperada (AGGREGATION_AMOUNT), ordena y selecciona TOP_SIZE.
+Publica el top final y limpia estado del cliente.
+En términos de patrón distribuido, Join funciona como un reducer final con sincronización por barrera.
+
+#### Formato de Mensajes Internos
+Se usa serialización JSON con dos formatos principales:
+
+#### Mensaje de datos:
+Lista con tres campos: client_id, fruit, amount.
+Mensaje de control EOF:
+Estructura de control con client_id.
+
+Esto permite distinguir mensajes de flujo normal frente a mensajes de cierre por cliente.
+
+---
+
+### Formato de Mensajes Internos
+Se usa serialización JSON con dos formatos principales:
+
+#### Mensaje de datos:
+Lista con tres campos: client_id, fruit, amount.
+#### Mensaje de control EOF:
+Estructura de control con client_id.
+Esto permite distinguir mensajes de flujo normal frente a mensajes de cierre por cliente.
+
+--- 
+### Propiedades del Diseño
+
+#### Escalabilidad horizontal:
+Sum y Aggregation pueden tener múltiples instancias.
+Tolerancia a desacople:
+Cada etapa se comunica por colas/exchanges y no por llamada directa.
+Sincronización por barrera:
+EOF y contadores garantizan que cada etapa cierre por cliente cuando realmente recibió todo.
+Limpieza de estado:
+Cada cliente se elimina de memoria tras emitir resultado.
+
+
+---
+La implementación resuelve un pipeline distribuido de agregación en tres etapas, con coordinación por mensajes de control EOF y barreras por cliente. Sum realiza acumulación parcial y particionado, Aggregation consolida por shard hasta completar todos los EOF esperados, y Join fusiona los tops locales en un resultado global final. La abstracción de middleware desacopla la lógica de negocio de RabbitMQ, habilitando una arquitectura modular, escalable y mantenible.
