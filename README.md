@@ -47,9 +47,17 @@ Tiene un hilo separado para consumir mensajes de control.
 - Luego envía cada fruta acumulada al aggregation correspondiente según una función de partición.
 - Finalmente envía un EOF a todas las instancias de Aggregation para ese cliente.
 
+
+![ ](./imgs/ARQUITECTURA.png  "Arquitectura")
+*Aquitectura de SUM*
+
+
 #### Concurrencia:
 Usa Condition para coordinar llegada de datos y señal de control.
 El hilo de control y el hilo consumidor principal comparten estado por cliente.
+
+![ ](./imgs/ejemplo_eof.png  "Ejemplo de flujo al recibir un EOF en Sum")
+*Ejemplo de flujo de SUM al recibir un EOF de un cliente*
 
 #### Apagado:
 - Implementa manejo de señales para shutdown ordenado.
@@ -68,8 +76,10 @@ Detectar cuándo recibió todos los EOF esperados de ese cliente.
 Calcular el top local de frutas y enviarlo a la cola de salida.
 Limpiar el estado en memoria del cliente una vez finalizado.
 
-#### Estructuras de estado
+![ ](./imgs/aggregations.png  "Agregations")
+*Ejemplo de flujo de Sum a Aggregation*
 
+#### Estructuras de estado
 totals_by_client: diccionario que guarda, para cada cliente, otro diccionario fruta -> total acumulado.
 eof_received_by_client: contador de EOF recibidos por cliente.
 finished_clients: conjunto de clientes ya cerrados, para ignorar datos tardíos y evitar reprocesamiento.
