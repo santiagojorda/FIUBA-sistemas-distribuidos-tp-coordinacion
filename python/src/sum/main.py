@@ -13,7 +13,10 @@ SUM_CONTROL_QUEUE = "SUM_CONTROL_QUEUE"
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 AGGREGATION_EXCHANGE = f"{AGGREGATION_PREFIX}_EXCHANGE"
+
 COUNT_OF_FIELDS_IN_DATA_MESSAGE = 3
+AMOUNT_OF_LETTERS_IN_ALPHABET = 25
+TIME_TO_WAIT_FOR_RESIDUAL_DATA = 5
 
 class SumFilter:
     def __init__(self):
@@ -47,7 +50,7 @@ class SumFilter:
 
       first_letter = fruit_name.lower()[0]
       letter_index = ord(first_letter) - ord('a')
-      if not (0 <= letter_index <= 25):
+      if not (0 <= letter_index <= AMOUNT_OF_LETTERS_IN_ALPHABET):
           return 0
       return letter_index % AGGREGATION_AMOUNT
 
@@ -55,7 +58,7 @@ class SumFilter:
         with self.condition:
             self.eof_received_by_client[client_id] = True
             logging.info(f"Sum ID: {ID} | client: {client_id} | Waiting residual data from message queue...")
-            self.condition.wait(timeout=5)
+            self.condition.wait(timeout=TIME_TO_WAIT_FOR_RESIDUAL_DATA)
 
             amount_by_fruit = self.amount_by_fruit_by_client.get(client_id, {})
             self.eof_received_by_client.pop(client_id, None)
