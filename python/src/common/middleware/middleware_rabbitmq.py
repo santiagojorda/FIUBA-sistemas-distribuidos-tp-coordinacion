@@ -57,6 +57,12 @@ class MessageMiddlewareQueueRabbitMQ(RabbitMQBase):
         )
         self.channel.start_consuming()
 
+    @handle_pika_errors("detener consumo")
+    def stop_consuming(self):
+        if self.connection and self.connection.is_open:
+            self.connection.add_callback_threadsafe(self.channel.stop_consuming)
+
+
 class MessageMiddlewareExchangeRabbitMQ(RabbitMQBase):
     """Clase base para Exchanges. Hereda lógica de conexión y de publicación."""
     
