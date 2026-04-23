@@ -1,7 +1,8 @@
 import os
 import logging
+import signal
 
-from common import middleware, message_protocol
+from common import middleware, message_protocol, exceptions
 
 MOM_HOST = os.environ["MOM_HOST"]
 INPUT_QUEUE = os.environ["INPUT_QUEUE"]
@@ -16,8 +17,15 @@ class JoinFilter:
         self.eof_received_by_client = {}
         self.fruit_top_by_client = {}
 
+        signal.signal(signal.SIGTERM, self.handle_exit)
+        signal.signal(signal.SIGINT, self.handle_exit)
+
         self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, INPUT_QUEUE)
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, OUTPUT_QUEUE)
+
+    def handle_exit(self, signum, frame):
+        logging.info(f"Join | Shutdown signal received ({signum}).")
+        raise exceptions.GracefulExit()
 
     def process_messsage(self, message, ack, nack):
         payload = message_protocol.internal.deserialize(message)
@@ -60,9 +68,18 @@ class JoinFilter:
         ack()
 
     def start(self):
-        logging.info("Join | Starting to consume messages")
-        self.input_queue.start_consuming(self.process_messsage)
-
+        try:
+            logging.info("Join | Starting to consume messages")
+            self.input_queue.start_consuming(self.process_messsage)
+        except exceptions.GracefulExit:
+            logging.info("Join | Loop interrupted by signal.")
+        except Exception as e:
+            logging.error(f"Join | Unexpected error: {e}")
+        finally:
+            logging.info("Join | Closing connections...")
+            self.input_queue.close()
+            self.output_queue.close()
+            logging.info("Join | Stopped safely.")
 def main():
     logging.basicConfig(level=logging.INFO)
     join_filter = JoinFilter()
